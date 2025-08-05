@@ -17,4 +17,3 @@ For commercial use permissions, contact the first author (plm@ae.mpg.de)
 - Probier_Contours.Rmd: Code for Exp. 1
 - Probier_Contour.nb.html: Output for Exp. 1
 - Probier_Online.Rmd: Code for Exp. 2
-- Probier_Online.nb.html: Output for Exp. 2
