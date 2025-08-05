@@ -1,0 +1,1466 @@
+---
+title: "Probier Online"
+author: "Pauline Larrouy-Maestri. Collaboration with Daniela Sammler, Hanna Ringer, and David Poeppel"
+date: "Updated: July 14 2025"
+output: html_document
+---
+
+Preparation and loading(s)
+
+```{r}
+
+rm(list = ls())
+
+setwd("/Users/p.larrouy/Desktop")
+
+library(readxl)
+library(readr)
+library(ggplot2)
+library(lme4)
+library(lmerTest)
+library(pivottabler)
+library(tidyr)
+library(tidyverse)
+library(MuMIn)
+library(broom)
+library(viridis) 
+library(ggpubr)
+library(hrbrthemes)
+library(broom)
+library(magrittr)
+library(dplyr)
+library(GGally)
+library(nlme)
+library(MuMIn)
+library(lcmm)
+library(jtools)
+library(huxtable)
+library(performance)
+library(interactions)
+library(GGally)
+library(hrbrthemes)
+library(extrafont)
+library(gtsummary)
+library(lcmm)
+library(modelsummary)
+library(pandoc)
+
+raw_data <- read_excel("Probier_data.xlsx",sheet = "Data_to_analyse")
+kernel_data <- read_excel("Probier_data.xlsx",sheet = "Kernels")
+
+```
+
+Subset to get the data to focus on for the general analyses
+
+```{r}
+
+ratings <-subset(raw_data, Task_Nr == "7" | Task_Nr == "12" | intention == "sugg" | intention =="crit")
+
+```
+
+Delete the participants who report hearing impairment (n = 3) or failed at the attention check, i.e.. higher than a mean of -80 (n=29) from the 207 online participants
+
+Delete also the Cola answers
+
+```{r}
+
+ID_to_delete = c("535963","535980","535997","536007","536035","536036","536065","536084","536105","536118","536196","536248","536280","536411","536462","536487","536497","536525","536532","536657","536669","536727","536875","539578","539595","540047","540084","540095","540098","540101")
+
+to_analyse <- ratings %>% 
+  filter(!Rec_Session_Id...1 %in% ID_to_delete)
+
+to_analyse <-subset(to_analyse, intention !="cola")
+
+# Check if the number of participant (n = 177) is correct after filtering
+group_by(to_analyse,Rec_Session_Id...1)
+
+# Check if that it is the right dataframe
+head(to_analyse)
+
+```
+
+Format the table that I can run a model (i.e., have criticism and suggestion ratings in the same column and add a variable name)
+
+```{r}
+
+to_analyse <- to_analyse %>% 
+  mutate(Condition = if_else(Task_Name == "Rating_criticism", "Criticism", "Suggestion"))
+to_analyse$Condition
+
+to_analyse <- to_analyse %>% 
+  mutate(Response = if_else(Condition == "Criticism", rate_crit,rate_sug))
+# to_analyse$Response
+
+to_analyse <- to_analyse %>%
+  mutate(Condition = factor(Condition, levels = c("Criticism", "Suggestion")))
+
+summary(to_analyse$Condition)
+
+# Check the number of responses in Criticism and Suggestion conditions
+count(to_analyse, Condition== "Criticism")
+count(to_analyse, Condition== "Suggestion")
+
+# Check the general mean for each Condition (to compare with Excel)
+to_analyse %>%
+  group_by(Condition) %>%
+  summarise_at(vars(Response), list(name = mean))
+
+```
+
+Add the info about the dimensions values (from Probier 1 and 2) and change the header for the Participant
+
+```{r}
+to_analyse_all <- full_join(kernel_data,to_analyse, join_by(Stim == Stim))
+to_analyse_all
+
+# add column Meanf0
+to_analyse_all <- to_analyse_all %>%
+  mutate(meanf0 = rowMeans(select(., p1, p2, p3, p4, p5), na.rm = TRUE))
+
+# Make sure that the variables are numeric
+
+# Check current type
+str(to_analyse_all[, c("direction", "spikiness")])
+
+# Force conversion to numeric (if not already)
+to_analyse_all <- to_analyse_all %>%
+  mutate(
+    direction = as.numeric(direction),
+    spikiness = as.numeric(spikiness)
+  )
+
+# Re-check structure
+summary(to_analyse_all[, c("direction", "spikiness")])
+
+# Change Exp_Subject_Id for Participant
+to_analyse_all$Participant <- to_analyse_all$Exp_Subject_Id
+```
+
+LMER model to see the over effect of predictors (discrete contours, spikiness, direction, meanf0) and interaction with Condition (criticism or suggestion tasks) on the ratings of stimuli (from 0 to 100, on the slider)
+
+```{r eval=FALSE, include=FALSE}
+# null model
+mod_null = lmer(Response ~ 1 + (1|Participant) + (1|Stim), data=to_analyse_all, REML = FALSE)
+mod_null 
+
+# Scale if necessary
+to_analyse_all <- to_analyse_all %>%
+   mutate(across(c(spikiness, direction, meanf0), ~ scale(., scale = TRUE)))
+
+
+mod_all <- lmer(Response ~ (intention.y + spikiness + direction + meanf0) *  Condition + (1|Participant) + (1|Stim), data=to_analyse_all,  REML = FALSE)
+print(summary(mod_all))
+
+summary(mod_all)
+
+# comparison of the full and null models
+print(anova(mod_null,mod_all))
+
+# info model
+icc(mod_all)
+r.squaredGLMM(mod_all)
+
+# Calculate ICC for Exp_Subject_Id and Stim separately
+
+# Extract variance components correctly
+vc <- VarCorr(mod_all)
+var_subject <- as.numeric(vc$Participant)  # Variance for subjects
+var_stim <- as.numeric(vc$Stim)               # Variance for stimuli
+var_residual <- attr(vc, "sc")^2              # Residual variance
+
+# Calculate ICCs
+icc_subject <- var_subject / (var_subject + var_stim + var_residual)
+icc_stim <- var_stim / (var_subject + var_stim + var_residual)
+
+cat(sprintf(
+  "ICC for Subjects: %.3f\nICC for Stimuli: %.3f",
+  icc_subject, icc_stim
+))
+```
+
+Plot of the results
+
+```{r eval=FALSE, include=FALSE}
+plot_coefs(mod_all,scale=TRUE, omit.coefs = c("(sessionsugg)", "sessionsugg", "(Intercept)", "Intercept"),legend.title = "Full model",colors = "black", show.values = TRUE,p = TRUE, value.offset = .3)
+
+new_labels <- c(
+  "intention.ysugg" = "Discrete contour",
+  "spikiness" = "Spikiness",
+  "direction" = "Direction",
+  "meanf0" = "Mean F0",
+  "ConditionSuggestion" = "Condition",  
+  "intention.ysugg:ConditionSuggestion" = "Discrete contour × Condition",
+  "spikiness:ConditionSuggestion" = "Spikiness × Condition",
+  "direction:ConditionSuggestion" = "Direction × Condition",
+  "meanf0:ConditionSuggestion" = "Mean F0 × Condition"
+)
+
+desired_order <- c(
+  "Discrete contour",
+  "Spikiness",
+  "Direction",
+  "Mean F0",
+  "Condition",
+  "Discrete contour × Condition",
+  "Spikiness × Condition",
+  "Direction × Condition",
+  "Mean F0 × Condition"
+)
+
+p <- plot_coefs(
+  mod_all,
+  scale = TRUE,
+  coef.labels = new_labels,  # Rename variables
+  coef.order = desired_order,  # Reorder variables
+  omit.coefs = c("(Intercept)", "Intercept"),  # Remove intercept if needed
+  legend.title = "Full model",
+  colors = "black",
+  show.values = TRUE,
+  p = TRUE,
+  stars = TRUE,
+  value.offset = .3
+)
+
+p
+```
+
+Attempt to change variables names and order: fail!
+
+```{r eval=FALSE, include=FALSE}
+data(mod_all)
+use_labels(mod_all,
+            meanf0 = "mean f0",
+            intentionsugg = "discrete contours",
+            PC1 = "contour shapes: Spikiness",
+            PC2 = "contour shapes: Pitch direction",
+            meanf0:sessionsugg = "mean F0 * session",
+            PC1:sessionsugg = "Spikiness * session",
+            PC2:sessionsugg = "Pitch direction * session"
+)
+           
+
+  # "intention.ysugg" = "Discrete contour",
+  # "spikiness" = "Spikiness",
+  # "direction" = "Direction",
+  # "meanf0" = "Mean F0",
+  # "ConditionSuggestion" = "Condition",  # Adjust based on your factor levels
+  # "intention.ysugg:ConditionSuggestion" = "Discrete contour × Condition",
+  # "spikiness:ConditionSuggestion" = "Spikiness × Condition",
+  # "direction:ConditionSuggestion" = "Direction × Condition",
+  # "meanf0:ConditionSuggestion" = "Mean F0 × Condition"
+
+plot_coefs(mod_all,scale=TRUE, omit.coefs = c("(sessionsugg)", "sessionsugg", "(Intercept)", "Intercept"),legend.title = "Full model",colors = "black", show.values = TRUE,p = TRUE, value.offset = .3)
+```
+
+Looking at the direction of the effects (comparison of meanF0, Discrete contours, Spikiness, and Direction) by visualizing the relation between response and features for both criticism and suggestions ratings
+
+```{r eval=FALSE, include=FALSE}
+# Plot interaction Condition*discrete contour
+cat_plot(
+  mod_all, 
+  pred = intention.y,       # Categorical predictor
+  modx = Condition,         # Categorical moderator
+  interval = TRUE,
+  int.width = 0.95,
+  colors = c("#e41a1c", "#377eb8"),  # Red (criticism), Blue (suggestion)
+  x.label = "Discrete contours",
+  y.label = "Predicted ratings",
+  legend.main = "Condition"
+) +
+  theme_minimal()
+
+# Plot interaction Condition*direction
+interact_plot(
+  mod_all,
+  pred = direction,
+  modx = Condition,         
+  interval = TRUE,          
+  int.width = 0.95,          
+  colors = c("#e41a1c", "#377eb8"),  
+  x.label = "Direction",     
+  y.label = "Predicted ratings",   
+  legend.main = "Condition" 
+) +
+  theme_minimal()
+
+# Plot interaction Condition*spikiness
+interact_plot(
+  mod_all,
+  pred = spikiness,
+  modx = Condition,         
+  interval = TRUE,          
+  int.width = 0.95,          
+  colors = c("#e41a1c", "#377eb8"),  
+  x.label = "Spikiness",     
+  y.label = "Predicted ratings",   
+  legend.main = "Condition" 
+) +
+  theme_minimal()
+
+# Plot interaction Condition*mean f0
+interact_plot(
+  mod_all,
+  pred = meanf0,
+  modx = Condition,         
+  interval = TRUE,          
+  int.width = 0.95,          
+  colors = c("#e41a1c", "#377eb8"),  
+  x.label = "Mean f0",     
+  y.label = "Predicted ratings",   
+  legend.main = "Condition" 
+) +
+  theme_minimal()
+
+```
+
+Focus on the R2 for each participant for the " criticism" and "suggestion" condition
+Spoiler: quite low!
+
+```{r}
+
+Crit_data <- to_analyse_all[ which(to_analyse_all$Condition=='Criticism'), ]
+Sugg_data <- to_analyse_all[ which(to_analyse_all$Condition=='Suggestion'), ]
+
+Crit_part <- Crit_data %>% group_by(Rec_Session_Id...1) %>%
+  do(mod1 = lm(scale(Response) ~ scale(as.numeric(direction)), data = .),
+     mod2 = lm(scale(Response) ~ scale(as.numeric(direction)), data = .)) %>% ungroup()
+
+#use broom the extract the slope and rsq per group
+Crit_glance <-Crit_part %>% mutate(tidy = map(mod1, broom::tidy),
+                                   glance = map(mod1, broom::glance),
+                                   augment = map(mod1, broom::augment),
+                                   rsq = glance %>% map_dbl('r.squared'),
+                                   slope = tidy %>% map_dbl(function(x) x$estimate[2])) 
+
+Crit_glance
+
+r2_crit <- ggplot(Crit_glance,aes(x=rsq)) + 
+  geom_histogram()
+r2_crit
+
+# same for p_values
+
+Sugg_part <- Sugg_data %>% group_by(Rec_Session_Id...1) %>%
+  do(mod1 = lm(scale(Response) ~ scale(as.numeric(direction)), data = .),
+     mod2 = lm(scale(Response) ~ scale(as.numeric(direction)), data = .)) %>% ungroup()
+
+#use broom the extract the slope and rsq per group
+Sugg_glance <- Sugg_part %>% mutate(tidy = map(mod1, broom::tidy),
+                                   glance = map(mod1, broom::glance),
+                                   augment = map(mod1, broom::augment),
+                                   rsq = glance %>% map_dbl('r.squared'),
+                                   slope = tidy %>% map_dbl(function(x) x$estimate[2])) 
+Sugg_glance
+
+r2_sugg <- ggplot(Sugg_glance,aes(x=rsq)) + 
+  geom_histogram()
+r2_sugg
+
+```
+
+
+### Analysis with ALL predictors (mean, discrete contour, dimensions spikiness and direction)
+
+Creation of tables for each condition separately, containing each participant use of each dimension (i.e., estimate of the factors "Average", "Intention (i.e., discrete contours),"direction" and "spikiness")
+
+[the goal is to check the "significance" of the dimensions and to be the basis for plot of the clusters per condition]
+
+```{r}
+Crit_part <- Crit_data %>% 
+  group_split(Participant) %>% 
+  map_df(~ lm(scale(Response) ~ scale(meanf0) + intention.x + scale(as.numeric(spikiness))+scale(as.numeric(direction)), data = .) %>% 
+           tidy() %>% 
+           mutate(Participant = unique(.x$Participant))
+          )
+
+Crit_part_info <- Crit_part %>%
+  add_column(add_column = "crit")
+Crit_part_info
+
+
+Sugg_part <- Sugg_data %>% 
+  group_split(Participant) %>% 
+  map_df(~ lm(scale(Response) ~ scale(meanf0) + intention.x + scale(as.numeric(spikiness))+scale(as.numeric(direction)), data = .) %>% 
+           tidy() %>% 
+           mutate(Participant = unique(.x$Participant))
+          )
+
+Sugg_part_info <- Sugg_part %>%
+  add_column(add_column = "sugg")
+Sugg_part_info
+
+All_part <- rbind(Crit_part_info, Sugg_part_info)
+All_part
+
+```
+
+Plot of the individual uses of the different types of pitch contour information for CRITICISM
+
+```{r}
+Crit_part_info$Condition <- Crit_part_info$add_column
+
+Crit_part_wide <- pivot_wider(Crit_part_info, id_cols = c(Participant, Condition), names_from = term, values_from = estimate)
+
+Crit_Coefficients <- ggparcoord(
+  Crit_part_wide, 
+  columns = 4:7, 
+  groupColumn = 2,
+  showPoints = TRUE, 
+  alphaLines = 0.3
+) +
+  scale_color_manual(values = "#e41a1c") +
+  scale_x_discrete(labels = c("Discrete contour", "Spikiness", "Direction", "Mean f0")) +
+  scale_y_continuous(limits = c(-4, 3), breaks = seq(-4, 3, by = 2)) +  # New y-axis scaling
+  theme_ipsum() +
+  theme(
+    # Remove legend
+    legend.position = "none",
+    
+    # Arial font for all text elements
+    text = element_text(family = "sans"),
+    axis.text.x = element_text(family = "sans", size = 12),  # X-axis labels
+    axis.text.y = element_text(family = "sans", size = 12),  # Y-axis labels
+    axis.title.x = element_blank(),  # Remove x-axis title
+    axis.title.y = element_text(family = "sans", size = 14)  # Y-axis title
+  )
+
+Crit_Coefficients
+```
+Plot of the individual uses of the different types of pitch contour information for SUGGESTION
+
+```{r}
+Sugg_part_info$Condition <- Sugg_part_info$add_column
+
+Sugg_part_wide <- pivot_wider(Sugg_part_info, id_cols = c(Participant, Condition), names_from = term, values_from = estimate)
+
+Sugg_Coefficients <- ggparcoord(
+  Sugg_part_wide, 
+  columns = 4:7, 
+  groupColumn = 2,
+  showPoints = TRUE, 
+  alphaLines = 0.3
+) +
+      scale_color_manual(values = "#377eb8") +
+  scale_x_discrete(labels = c("Discrete contour", "Spikiness", "Direction", "Mean f0")) +
+  scale_y_continuous(limits = c(-4, 3), breaks = seq(-4, 3, by = 2)) +  # New y-axis scaling
+  theme_ipsum() +
+  theme(
+    # Remove legend
+    legend.position = "none",
+    text = element_text(family = "sans"),
+    axis.text.x = element_text(family = "sans", size = 12),  # X-axis labels
+    axis.text.y = element_text(family = "sans", size = 12),  # Y-axis labels
+    axis.title.x = element_blank(),  # Remove x-axis title
+    axis.title.y = element_text(family = "sans", size = 14)  # Y-axis title
+  )
+
+Sugg_Coefficients
+```
+
+
+Plot of the individual uses of the different types of pitch contour information for both CRITICISM and SUGGESTION
+
+```{r}
+All_part$Condition <- All_part$add_column
+
+All_part_wide <- pivot_wider(All_part, id_cols = c(Participant, Condition), names_from = term, values_from = estimate)
+
+Coefficients <- ggparcoord(All_part_wide, columns =  4:7, groupColumn = 2,showPoints = TRUE, alphaLines = 0.3)+
+  scale_color_manual(values = c("#e41a1c","#377eb8"))+
+  theme_ipsum()+
+  scale_x_discrete(labels = c("Mean f0", "Discrete contour", "Spikiness", "Direction"))+
+  # scale_fill_discrete(labels=c("Criticism ratings", "Suggestion ratings")) +
+  theme(legend.title = element_text(size=20))+
+  theme(legend.text = element_text(size=16))
+
+ggsave("Coefficients.png", plot = Coefficients, width = 7, height = 7, units = "in")
+Coefficients
+```
+
+
+CRITICISM: Latent class analysis to see if/how participants similarly (or not) use the different features 
+
+```{r eval=FALSE, include=FALSE}
+
+#no random effects:
+m_fixed_only  <- hlme(Response ~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), subject='Participant', ng = 1,data =Crit_data)
+summary(m_fixed_only)
+
+#random effect: ~1 meaning:random intercepts in participant
+m_random<- hlme(Response ~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1,subject='Participant', ng = 1, data = Crit_data)
+summary(m_random)
+
+summarytable(m_fixed_only, m_random) #m_random is better (but I already knew that, so good sanity check)
+
+#with intercepts in mixture
+m_2cl <- hlme(Response ~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), mixture=~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1, subject='Participant', ng = 2, B=m_random, data = Crit_data)
+summary(m_2cl)
+
+m_3cl <- hlme(Response ~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), mixture=~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1, subject='Participant', ng = 3, B=m_random, data = Crit_data)
+summary(m_3cl)
+
+m_4cl <- hlme(Response ~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), mixture=~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1, subject='Participant', ng = 4, B=m_random, data = Crit_data)
+summary(m_4cl)
+
+m_5cl <- hlme(Response ~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), mixture=~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1, subject='Participant', ng = 5, B=m_random, data = Crit_data)
+summary(m_5cl)
+
+m_6cl <- hlme(Response ~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), mixture=~ meanf0+ intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1, subject='Participant', ng = 6, B=m_random, data = Crit_data)
+summary(m_6cl)
+
+d<-summarytable(m_fixed_only, m_random, m_2cl, m_3cl, m_4cl, m_5cl, m_6cl) #??? classes is better
+
+d<- as.data.frame(d)
+View(d)
+write.csv(d,"summary_table_LCA_criticism.csv")
+
+summary(m_2cl)
+plot(m_2cl)
+p2 <-postprob(m_2cl) 
+p2
+
+# [[1]]
+#   class1 class2
+# N  74.00 103.00
+# %  41.81  58.19
+# 
+# [[2]]
+#         prob1  prob2
+# class1 0.9713 0.0287
+# class2 0.0389 0.9611
+# 
+# [[3]]
+#          class1 class2
+# prob>0.7  97.30  95.15
+# prob>0.8  95.95  92.23
+# prob>0.9  90.54  88.35
+
+summary(m_3cl)
+plot(m_3cl)
+p3 <-postprob(m_3cl) 
+p3
+
+# [[1]]
+#   class1 class2 class3
+# N  38.00  95.00  44.00
+# %  21.47  53.67  24.86
+# 
+# [[2]]
+#         prob1  prob2  prob3
+# class1 0.9648 0.0352 0.0000
+# class2 0.0221 0.9567 0.0211
+# class3 0.0000 0.0888 0.9112
+# 
+# [[3]]
+#          class1 class2 class3
+# prob>0.7  94.74  96.84  84.09
+# prob>0.8  94.74  91.58  84.09
+# prob>0.9  92.11  86.32  70.45
+
+summary(m_4cl)
+plot(m_4cl)
+p4 <-postprob(m_4cl) 
+p4
+
+# [[1]]
+#   class1 class2 class3 class4
+# N  25.00  73.00  43.00  36.00
+# %  14.12  41.24  24.29  20.34
+# 
+# [[2]]
+#         prob1  prob2  prob3  prob4
+# class1 0.9770 0.0225 0.0006 0.0000
+# class2 0.0262 0.9311 0.0338 0.0089
+# class3 0.0111 0.0676 0.9054 0.0159
+# class4 0.0000 0.0284 0.0279 0.9437
+# 
+# [[3]]
+#          class1 class2 class3 class4
+# prob>0.7     96  91.78  88.37  94.44
+# prob>0.8     96  87.67  86.05  88.89
+# prob>0.9     96  82.19  65.12  80.56
+
+# #Interpretation: The first class includes a posteriori 25 subjects (14.12%), class 2 includes 73 (41.24%), 
+# # class3 includes 43 (24.29%) and class 4, 36 subjects (20.34%).
+# #Subjects were classified in class 1 with a mean posterior probability of 97.7%, in class 2 with a mean posterior probability of 93.11%, in class 3 with 90.54%, in class 4 with 94.37%.
+# 
+# # In class 1, 96%   were classified with a posterior probability above 0.7
+# # in class 2, 91.78%   were classified  with a posterior probability above 0.7
+# # in class 3, 88.37%   were classified  with a posterior probability above 0.7
+# # in class 4, 94.44%   were classified  with a posterior probability above 0.7
+
+summary(m_5cl)
+plot(m_5cl)
+p5 <-postprob(m_5cl) 
+p5
+
+#   class1 class2 class3 class4 class5
+# N  24.00  84.00  45.00  11.00  13.00
+# %  13.56  47.46  25.42   6.21   7.34
+# 
+# [[2]]
+#         prob1  prob2  prob3  prob4  prob5
+# class1 0.9693 0.0295 0.0000 0.0012 0.0000
+# class2 0.0134 0.9463 0.0299 0.0067 0.0037
+# class3 0.0000 0.0417 0.9314 0.0209 0.0060
+# class4 0.0115 0.0256 0.0126 0.9502 0.0000
+# class5 0.0000 0.0322 0.0338 0.0000 0.9340
+# 
+# [[3]]
+#          class1 class2 class3 class4 class5
+# prob>0.7 100.00  94.05  93.33 100.00 100.00
+# prob>0.8  91.67  91.67  86.67  90.91  84.62
+# prob>0.9  87.50  84.52  77.78  90.91  69.23
+
+summary(m_6cl)
+plot(m_6cl)
+p6 <-postprob(m_6cl) 
+p6
+
+# [[1]]
+#   class1 class2 class3 class4 class5 class6
+# N  25.00   9.00   80.0  36.00   9.00  18.00
+# %  14.12   5.08   45.2  20.34   5.08  10.17
+# 
+# [[2]]
+#         prob1  prob2  prob3  prob4  prob5  prob6
+# class1 0.9637 0.0005 0.0340 0.0000 0.0018 0.0000
+# class2 0.0023 0.9394 0.0463 0.0000 0.0000 0.0120
+# class3 0.0108 0.0029 0.9446 0.0306 0.0014 0.0097
+# class4 0.0000 0.0000 0.0575 0.9033 0.0023 0.0370
+# class5 0.0143 0.0000 0.0662 0.0044 0.9150 0.0000
+# class6 0.0000 0.0050 0.0056 0.0218 0.0000 0.9677
+# 
+# [[3]]
+#          class1 class2 class3 class4 class5 class6
+# prob>0.7     96  88.89  92.50  91.67  88.89 100.00
+# prob>0.8     96  88.89  91.25  75.00  77.78 100.00
+# prob>0.9     88  88.89  81.25  69.44  66.67  88.89
+
+# write.csv(p[[1]],"1_post_prob_table_4_classes_criticism.csv")
+# write.csv(p[[2]],"2_post_prob_table_4_classes_criticism.csv")
+# write.csv(p[[3]],"3_post_prob_table_4_classes_criticism.csv")
+
+output_m_2cl <- as.data.frame(summary(m_2cl))
+View(output_m_2cl)
+write.csv(output_m_2cl, "coeff_best_model_2_classes_criticism.csv")
+
+#                             coef      Se    Wald p-value
+# intercept class1        -4.22569 3.22366  -1.311 0.18991
+# intercept class2        -1.34850 2.80126  -0.481 0.63024
+# Average class1          -0.20340 0.02480  -8.202 0.00000
+# Average class2           0.41036 0.01934  21.220 0.00000
+# intention.xsugg class1   2.54496 1.86271   1.366 0.17186
+# intention.xsugg class2   2.85158 1.59539   1.787 0.07388
+# as.numeric(...) class1  12.86725 3.90254   3.297 0.00098
+# as.numeric(...) class2  11.53489 3.33878   3.455 0.00055
+# as.numeric(...) class1  20.77415 3.33232   6.234 0.00000
+# as.numeric(...) class2  13.08480 2.86595   4.566 0.00000
+
+output_m_3cl <- as.data.frame(summary(m_3cl))
+View(output_m_3cl)
+write.csv(output_m_3cl, "coeff_best_model_3_classes_criticism.csv")
+
+#                             coef      Se    Wald p-value
+# intercept class1         6.45499 4.50697   1.432 0.15208
+# intercept class2       -10.74244 2.97695  -3.609 0.00031
+# intercept class3         7.73221 4.62090   1.673 0.09427
+# Average class1          -0.41997 0.03428 -12.251 0.00000
+# Average class2           0.18845 0.02521   7.476 0.00000
+# Average class3           0.57541 0.03385  16.998 0.00000
+# intention.xsugg class1   1.35317 2.53586   0.534 0.59361
+# intention.xsugg class2   5.40087 1.62560   3.322 0.00089
+# intention.xsugg class3  -2.14301 2.51261  -0.853 0.39371
+# as.numeric(...) class1   6.74789 5.40374   1.249 0.21176
+# as.numeric(...) class2  20.66297 3.58075   5.771 0.00000
+# as.numeric(...) class3  -2.50086 5.74698  -0.435 0.66345
+# as.numeric(...) class1   3.78925 4.60344   0.823 0.41043
+# as.numeric(...) class2  33.24070 3.44421   9.651 0.00000
+# as.numeric(...) class3 -10.52450 6.13994  -1.714 0.08651
+
+output_m_4cl <- as.data.frame(summary(m_4cl))
+View(output_m_4cl)
+write.csv(output_m_4cl, "coeff_best_model_4_classes_criticism.csv")
+
+#                            coef      Se    Wald p-value
+# intercept class1         1.71926 5.58709   0.308 0.75830
+# intercept class2         9.74890 3.56099   2.738 0.00619
+# intercept class3       -31.19164 4.60029  -6.780 0.00000
+# intercept class4         3.25539 4.52603   0.719 0.47198
+# Average class1          -0.48716 0.03982 -12.234 0.00000
+# Average class2           0.04196 0.02335   1.797 0.07237
+# Average class3           0.30443 0.03930   7.747 0.00000
+# Average class4           0.65621 0.02849  23.033 0.00000
+# intention.xsugg class1   3.57874 3.00591   1.191 0.23382
+# intention.xsugg class2  -1.38716 1.95574  -0.709 0.47815
+# intention.xsugg class3  11.49717 2.54113   4.524 0.00001
+# intention.xsugg class4  -0.03279 0.70794  -0.046 0.96306
+# as.numeric(...) class1  15.69656 6.61182   2.374 0.01760
+# as.numeric(...) class2  -2.35921 4.52224  -0.522 0.60188
+# as.numeric(...) class3  38.70180 5.53433   6.993 0.00000
+# as.numeric(...) class4   7.05568 4.80379   1.469 0.14189
+# as.numeric(...) class1  22.11599 5.66529   3.904 0.00009
+# as.numeric(...) class2  -9.02189 4.30736  -2.095 0.03621
+# as.numeric(...) class3  67.61736 5.90234  11.456 0.00000
+# as.numeric(...) class4   2.60340 5.65876   0.460 0.64547
+
+output_m_5cl <- as.data.frame(summary(m_5cl))
+View(output_m_5cl)
+write.csv(output_m_5cl, "coeff_best_model_5_classes_criticism.csv")
+
+output_m_6cl <- as.data.frame(summary(m_6cl))
+View(output_m_6cl)
+write.csv(output_m_6cl, "coeff_best_model_6_classes_criticism.csv")
+
+
+postprob(m_2cl) 
+
+# Posterior classification: 
+#   class1 class2
+# N  74.00 103.00
+# %  41.81  58.19
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2
+# class1 0.9713 0.0287
+# class2 0.0389 0.9611
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2
+# prob>0.7  97.30  95.15
+# prob>0.8  95.95  92.23
+# prob>0.9  90.54  88.35
+
+postprob(m_3cl) 
+
+# Posterior classification: 
+#   class1 class2 class3
+# N  38.00  95.00  44.00
+# %  21.47  53.67  24.86
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2  prob3
+# class1 0.9648 0.0352 0.0000
+# class2 0.0221 0.9567 0.0211
+# class3 0.0000 0.0888 0.9112
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2 class3
+# prob>0.7  94.74  96.84  84.09
+# prob>0.8  94.74  91.58  84.09
+# prob>0.9  92.11  86.32  70.45
+
+postprob(m_4cl) 
+
+# Posterior classification: 
+#   class1 class2 class3 class4
+# N  25.00  73.00  43.00  36.00
+# %  14.12  41.24  24.29  20.34
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2  prob3  prob4
+# class1 0.9770 0.0225 0.0006 0.0000
+# class2 0.0262 0.9311 0.0338 0.0089
+# class3 0.0111 0.0676 0.9054 0.0159
+# class4 0.0000 0.0284 0.0279 0.9437
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2 class3 class4
+# prob>0.7     96  91.78  88.37  94.44
+# prob>0.8     96  87.67  86.05  88.89
+# prob>0.9     96  82.19  65.12  80.56
+
+postprob(m_5cl) 
+
+# Posterior classification: 
+#   class1 class2 class3 class4 class5
+# N  24.00  84.00  45.00  11.00  13.00
+# %  13.56  47.46  25.42   6.21   7.34
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2  prob3  prob4  prob5
+# class1 0.9693 0.0295 0.0000 0.0012 0.0000
+# class2 0.0134 0.9463 0.0299 0.0067 0.0037
+# class3 0.0000 0.0417 0.9314 0.0209 0.0060
+# class4 0.0115 0.0256 0.0126 0.9502 0.0000
+# class5 0.0000 0.0322 0.0338 0.0000 0.9340
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2 class3 class4 class5
+# prob>0.7 100.00  94.05  93.33 100.00 100.00
+# prob>0.8  91.67  91.67  86.67  90.91  84.62
+# prob>0.9  87.50  84.52  77.78  90.91  69.23
+
+postprob(m_6cl) 
+
+# Posterior classification: 
+#   class1 class2 class3 class4 class5 class6
+# N  25.00   9.00   80.0  36.00   9.00  18.00
+# %  14.12   5.08   45.2  20.34   5.08  10.17
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2  prob3  prob4  prob5  prob6
+# class1 0.9637 0.0005 0.0340 0.0000 0.0018 0.0000
+# class2 0.0023 0.9394 0.0463 0.0000 0.0000 0.0120
+# class3 0.0108 0.0029 0.9446 0.0306 0.0014 0.0097
+# class4 0.0000 0.0000 0.0575 0.9033 0.0023 0.0370
+# class5 0.0143 0.0000 0.0662 0.0044 0.9150 0.0000
+# class6 0.0000 0.0050 0.0056 0.0218 0.0000 0.9677
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2 class3 class4 class5 class6
+# prob>0.7     96  88.89  92.50  91.67  88.89 100.00
+# prob>0.8     96  88.89  91.25  75.00  77.78 100.00
+# prob>0.9     88  88.89  81.25  69.44  66.67  88.89
+
+table_coefs_2 <- subset(output_m_2cl, output_m_2cl$`p-value`<.05)
+table_coefs_2
+
+table_coefs_3 <- subset(output_m_3cl, output_m_3cl$`p-value`<.05)
+table_coefs_3
+
+table_coefs_4 <- subset(output_m_4cl, output_m_4cl$`p-value`<.05)
+table_coefs_4
+
+table_coefs_5 <- subset(output_m_5cl, output_m_5cl$`p-value`<.05)
+table_coefs_5
+
+table_coefs_6 <- subset(output_m_6cl, output_m_6cl$`p-value`<.05)
+table_coefs_6
+
+```
+
+SUGGESTION: Latent class analysis to see if/how participants similarly (or not) use the different features 
+
+```{r eval=FALSE, include=FALSE}
+
+#no random effects:
+m_fixed_only  <- hlme(Response ~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), subject='Participant', ng = 1,data =Sugg_data)
+summary(m_fixed_only)
+
+#random effect: ~1 meaning:random intercepts in participant
+m_random<- hlme(Response ~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1,subject='Participant', ng = 1, data = Sugg_data)
+summary(m_random)
+
+summarytable(m_fixed_only, m_random) #m_random is better (but I already knew that, so good sanity check)
+
+#with intercepts in mixture
+m_2cl <- hlme(Response ~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), mixture=~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1, subject='Participant', ng = 2, B=m_random, data = Sugg_data)
+summary(m_2cl)
+
+m_3cl <- hlme(Response ~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), mixture=~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1, subject='Participant', ng = 3, B=m_random, data = Sugg_data)
+summary(m_3cl)
+
+m_4cl <- hlme(Response ~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), mixture=~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1, subject='Participant', ng = 4, B=m_random, data = Sugg_data)
+summary(m_4cl)
+
+m_5cl <- hlme(Response ~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), mixture=~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1, subject='Participant', ng = 5, B=m_random, data = Sugg_data)
+summary(m_5cl)
+
+m_6cl <- hlme(Response ~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), mixture=~ meanf0 + intention.x + as.numeric(spikiness)+as.numeric(direction), random =~1, subject='Participant', ng = 6, B=m_random, data = Sugg_data)
+summary(m_6cl)
+
+d<-summarytable(m_fixed_only, m_random, m_2cl, m_3cl, m_4cl, m_5cl, m_6cl) #??? classes is better
+
+#              G    loglik npm      BIC    %class1  %class2   %class3  %class4   %class5  %class6
+# m_fixed_only 1 -77653.12   6 155337.3 100.000000                                               
+# m_random     1 -76746.34   7 153528.9 100.000000                                               
+# m_2cl        2 -75602.36  13 151272.0  43.502825 56.49718                                      
+# m_3cl        3 -75409.39  19 150917.1  35.028249 14.12429 50.847458                            
+# m_4cl        4 -75289.88  25 150709.2   3.954802 44.63277 16.384181 35.02825                   
+# m_5cl        5 -75237.09  31 150634.6  11.299435 44.63277 15.819209 19.77401  8.474576         
+# m_6cl        6 -75196.16  37 150583.8   3.954802 17.51412  9.039548 14.12429 36.723164 18.64407
+
+d<- as.data.frame(d)
+View(d)
+write.csv(d,"summary_table_LCA_suggestion.csv")
+
+summary(m_2cl)
+plot(m_2cl)
+p2 <-postprob(m_2cl) 
+p2
+
+#   class1 class2
+# N   77.0  100.0
+# %   43.5   56.5
+# 
+# [[2]]
+#         prob1  prob2
+# class1 0.9550 0.0450
+# class2 0.0331 0.9669
+# 
+# [[3]]
+#          class1 class2
+# prob>0.7  94.81     96
+# prob>0.8  90.91     95
+# prob>0.9  88.31     86
+
+summary(m_3cl)
+plot(m_3cl)
+p3 <-postprob(m_3cl) 
+p3
+
+# [[1]]
+#   class1 class2 class3
+# N  62.00  25.00  90.00
+# %  35.03  14.12  50.85
+# 
+# [[2]]
+#         prob1  prob2  prob3
+# class1 0.9563 0.0221 0.0216
+# class2 0.0032 0.9923 0.0045
+# class3 0.0445 0.0102 0.9454
+# 
+# [[3]]
+#          class1 class2 class3
+# prob>0.7  95.16    100  91.11
+# prob>0.8  91.94    100  85.56
+# prob>0.9  87.10    100  84.44
+
+summary(m_4cl)
+plot(m_4cl)
+p4 <-postprob(m_4cl) 
+p4
+
+# [[1]]
+#   class1 class2 class3 class4
+# N   7.00  79.00  29.00  62.00
+# %   3.95  44.63  16.38  35.03
+# 
+# [[2]]
+#         prob1  prob2  prob3  prob4
+# class1 0.9999 0.0001 0.0000 0.0000
+# class2 0.0014 0.9408 0.0113 0.0465
+# class3 0.0001 0.0249 0.9673 0.0077
+# class4 0.0000 0.0702 0.0056 0.9242
+# 
+# [[3]]
+#          class1 class2 class3 class4
+# prob>0.7    100  92.41  96.55  85.48
+# prob>0.8    100  86.08  96.55  82.26
+# prob>0.9    100  84.81  89.66  75.81
+
+summary(m_5cl)
+plot(m_5cl)
+p5 <-postprob(m_5cl) 
+p5
+
+# [[1]]
+#   class1 class2 class3 class4 class5
+# N   20.0  79.00  28.00  35.00  15.00
+# %   11.3  44.63  15.82  19.77   8.47
+# 
+# [[2]]
+#         prob1  prob2  prob3  prob4  prob5
+# class1 0.9665 0.0328 0.0008 0.0000 0.0000
+# class2 0.0072 0.9612 0.0064 0.0241 0.0011
+# class3 0.0028 0.0089 0.9755 0.0128 0.0000
+# class4 0.0000 0.0669 0.0097 0.9059 0.0176
+# class5 0.0000 0.0044 0.0000 0.0503 0.9453
+# 
+# [[3]]
+#          class1 class2 class3 class4 class5
+# prob>0.7    100  96.20 100.00  88.57  93.33
+# prob>0.8     95  94.94 100.00  74.29  93.33
+# prob>0.9     85  88.61  89.29  68.57  86.67
+
+summary(m_6cl)
+plot(m_6cl)
+p6 <-postprob(m_6cl) 
+p6
+
+# Posterior classification: 
+#   class1 class2 class3 class4 class5 class6
+# N   7.00  31.00  16.00  25.00  65.00  33.00
+# %   3.95  17.51   9.04  14.12  36.72  18.64
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2  prob3  prob4  prob5  prob6
+# class1 0.9712 0.0286 0.0000 0.0002 0.0000 0.0000
+# class2 0.0001 0.8712 0.0000 0.0027 0.1260 0.0000
+# class3 0.0000 0.0000 0.9551 0.0000 0.0313 0.0136
+# class4 0.0000 0.0380 0.0000 0.9289 0.0126 0.0205
+# class5 0.0000 0.0609 0.0031 0.0001 0.9071 0.0287
+# class6 0.0000 0.0002 0.0219 0.0142 0.0721 0.8917
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2 class3 class4 class5 class6
+# prob>0.7    100  80.65 100.00     88  90.77  90.91
+# prob>0.8    100  64.52 100.00     88  78.46  78.79
+# prob>0.9    100  58.06  81.25     80  67.69  66.67
+
+# write.csv(p[[1]],"1_post_prob_table_4_classes_criticism.csv")
+# write.csv(p[[2]],"2_post_prob_table_4_classes_criticism.csv")
+# write.csv(p[[3]],"3_post_prob_table_4_classes_criticism.csv")
+
+output_m_2cl <- as.data.frame(summary(m_2cl))
+View(output_m_2cl)
+write.csv(output_m_2cl, "coeff_best_model_2_classes_suggestion.csv")
+
+#                             coef      Se    Wald p-value
+# intercept class1        10.72702 3.20554   3.346 0.00082
+# intercept class2         2.55788 2.76506   0.925 0.35493
+# Average class1          -0.13363 0.02436  -5.485 0.00000
+# Average class2           0.45064 0.02132  21.136 0.00000
+# intention.xsugg class1  -4.41891 1.74499  -2.532 0.01133
+# intention.xsugg class2   1.10377 1.51345   0.729 0.46581
+# as.numeric(...) class1  -8.99092 3.85106  -2.335 0.01956
+# as.numeric(...) class2   7.38173 3.29482   2.240 0.02506
+# as.numeric(...) class1  23.76350 3.98283   5.966 0.00000
+# as.numeric(...) class2  33.46634 3.33786  10.026 0.00000
+
+output_m_3cl <- as.data.frame(summary(m_3cl))
+View(output_m_3cl)
+write.csv(output_m_3cl, "coeff_best_model_3_classes_suggestion.csv")
+
+#                             coef      Se    Wald p-value
+# intercept class1        19.41365 3.46695   5.600 0.00000
+# intercept class2       -18.07908 5.62003  -3.217 0.00130
+# intercept class3         3.95084 2.93835   1.345 0.17876
+# Average class1          -0.13799 0.02797  -4.934 0.00000
+# Average class2           0.08435 0.04056   2.080 0.03757
+# Average class3           0.47776 0.02230  21.426 0.00000
+# intention.xsugg class1  -7.23747 1.88493  -3.840 0.00012
+# intention.xsugg class2   8.32011 2.88564   2.883 0.00394
+# intention.xsugg class3   0.00052 0.01860   0.028 0.97788
+# as.numeric(...) class1 -20.79227 4.24201  -4.902 0.00000
+# as.numeric(...) class2  37.00539 5.90966   6.262 0.00000
+# as.numeric(...) class3   4.13456 2.67941   1.543 0.12281
+# as.numeric(...) class1  -1.71066 3.63527  -0.471 0.63795
+# as.numeric(...) class2 109.54150 5.94327  18.431 0.00000
+# as.numeric(...) class3  26.83012 3.25613   8.240 0.00000
+
+output_m_4cl <- as.data.frame(summary(m_4cl))
+View(output_m_4cl)
+write.csv(output_m_4cl, "coeff_best_model_4_classes_suggestion.csv")
+
+#                             coef       Se    Wald p-value
+# intercept class1        32.14480  9.88912   3.251 0.00115
+# intercept class2        15.28543  3.12955   4.884 0.00000
+# intercept class3       -13.49174  5.00092  -2.698 0.00698
+# intercept class4         0.54657  4.43167   0.123 0.90184
+# Average class1          -0.75633  0.05707 -13.252 0.00000
+# Average class2           0.04387  0.03620   1.212 0.22559
+# Average class3           0.04890  0.03028   1.615 0.10626
+# Average class4           0.57736  0.04325  13.349 0.00000
+# intention.xsugg class1 -22.75143  5.44548  -4.178 0.00003
+# intention.xsugg class2  -5.13427  1.71333  -2.997 0.00273
+# intention.xsugg class3   8.71575  2.73052   3.192 0.00141
+# intention.xsugg class4   1.39113  1.92730   0.722 0.47042
+# as.numeric(...) class1 -51.41432 11.40426  -4.508 0.00001
+# as.numeric(...) class2 -13.32746  3.97567  -3.352 0.00080
+# as.numeric(...) class3  36.18242  5.57964   6.485 0.00000
+# as.numeric(...) class4   6.73793  4.05664   1.661 0.09672
+# as.numeric(...) class1  -3.63708  9.65917  -0.377 0.70651
+# as.numeric(...) class2   0.89518  4.06750   0.220 0.82581
+# as.numeric(...) class3 103.85148  5.41522  19.178 0.00000
+# as.numeric(...) class4  34.15937  4.16410   8.203 0.00000
+
+output_m_5cl <- as.data.frame(summary(m_5cl))
+View(output_m_5cl)
+write.csv(output_m_5cl, "coeff_best_model_5_classes_suggestion.csv")
+
+output_m_6cl <- as.data.frame(summary(m_6cl))
+View(output_m_6cl)
+write.csv(output_m_6cl, "coeff_best_model_6_classes_suggestion.csv")
+
+postprob(m_2cl) 
+ 
+# Posterior classification: 
+#   class1 class2
+# N   77.0  100.0
+# %   43.5   56.5
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2
+# class1 0.9550 0.0450
+# class2 0.0331 0.9669
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2
+# prob>0.7  94.81     96
+# prob>0.8  90.91     95
+# prob>0.9  88.31     86
+
+postprob(m_3cl) 
+
+# Posterior classification: 
+#   class1 class2 class3
+# N  62.00  25.00  90.00
+# %  35.03  14.12  50.85
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2  prob3
+# class1 0.9563 0.0221 0.0216
+# class2 0.0032 0.9923 0.0045
+# class3 0.0445 0.0102 0.9454
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2 class3
+# prob>0.7  95.16    100  91.11
+# prob>0.8  91.94    100  85.56
+# prob>0.9  87.10    100  84.44
+
+postprob(m_4cl) 
+
+# Posterior classification: 
+#   class1 class2 class3 class4
+# N   7.00  79.00  29.00  62.00
+# %   3.95  44.63  16.38  35.03
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2  prob3  prob4
+# class1 0.9999 0.0001 0.0000 0.0000
+# class2 0.0014 0.9408 0.0113 0.0465
+# class3 0.0001 0.0249 0.9673 0.0077
+# class4 0.0000 0.0702 0.0056 0.9242
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2 class3 class4
+# prob>0.7    100  92.41  96.55  85.48
+# prob>0.8    100  86.08  96.55  82.26
+# prob>0.9    100  84.81  89.66  75.81
+
+postprob(m_5cl) 
+
+# Posterior classification: 
+#   class1 class2 class3 class4 class5
+# N   20.0  79.00  28.00  35.00  15.00
+# %   11.3  44.63  15.82  19.77   8.47
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2  prob3  prob4  prob5
+# class1 0.9665 0.0328 0.0008 0.0000 0.0000
+# class2 0.0072 0.9612 0.0064 0.0241 0.0011
+# class3 0.0028 0.0089 0.9755 0.0128 0.0000
+# class4 0.0000 0.0669 0.0097 0.9059 0.0176
+# class5 0.0000 0.0044 0.0000 0.0503 0.9453
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2 class3 class4 class5
+# prob>0.7    100  96.20 100.00  88.57  93.33
+# prob>0.8     95  94.94 100.00  74.29  93.33
+# prob>0.9     85  88.61  89.29  68.57  86.67
+
+postprob(m_6cl) 
+
+# Posterior classification: 
+#   class1 class2 class3 class4 class5 class6
+# N   7.00  31.00  16.00  25.00  65.00  33.00
+# %   3.95  17.51   9.04  14.12  36.72  18.64
+#  
+# Posterior classification table: 
+#      --> mean of posterior probabilities in each class 
+#         prob1  prob2  prob3  prob4  prob5  prob6
+# class1 0.9712 0.0286 0.0000 0.0002 0.0000 0.0000
+# class2 0.0001 0.8712 0.0000 0.0027 0.1260 0.0000
+# class3 0.0000 0.0000 0.9551 0.0000 0.0313 0.0136
+# class4 0.0000 0.0380 0.0000 0.9289 0.0126 0.0205
+# class5 0.0000 0.0609 0.0031 0.0001 0.9071 0.0287
+# class6 0.0000 0.0002 0.0219 0.0142 0.0721 0.8917
+#  
+# Posterior probabilities above a threshold (%): 
+#          class1 class2 class3 class4 class5 class6
+# prob>0.7    100  80.65 100.00     88  90.77  90.91
+# prob>0.8    100  64.52 100.00     88  78.46  78.79
+# prob>0.9    100  58.06  81.25     80  67.69  66.67
+
+table_coefs_2 <- subset(output_m_2cl, output_m_2cl$`p-value`<.05)
+table_coefs_2
+
+table_coefs_3 <- subset(output_m_3cl, output_m_3cl$`p-value`<.05)
+table_coefs_3
+
+table_coefs_4 <- subset(output_m_4cl, output_m_4cl$`p-value`<.05)
+table_coefs_4
+
+table_coefs_5 <- subset(output_m_5cl, output_m_5cl$`p-value`<.05)
+table_coefs_5
+
+table_coefs_6 <- subset(output_m_6cl, output_m_6cl$`p-value`<.05)
+table_coefs_6
+
+
+```
+
+CRITICISM: retrieving subjects IDs for each class in the case of 2, 3, 4, and 5 classes
+
+```{r eval=FALSE, include=FALSE}
+Crit_data$Participant <- as.character(Crit_data$Participant)
+# View(Crit_data)
+
+people_2_classes <- as.data.frame(m_2cl$pprob)
+# View(people_2_classes)
+LCA_2_classes <- write.csv(people_2_classes, "LCA_2_classes.csv")
+Crit_data$CLASS_2 <- factor(people_2_classes$class[sapply(Crit_data$Participant, function(x) which(people_2_classes$Participant==x))])
+
+people_3_classes <- as.data.frame(m_3cl$pprob)
+# View(people_3_classes)
+LCA_3_classes <- write.csv(people_3_classes, "LCA_3_classes.csv")
+Crit_data$CLASS_3 <- factor(people_3_classes$class[sapply(Crit_data$Participant, function(x) which(people_3_classes$Participant==x))])
+
+people_4_classes <- as.data.frame(m_4cl$pprob)
+# View(people_4_classes)
+LCA_4_classes <- write.csv(people_4_classes, "LCA_4_classes.csv")
+Crit_data$CLASS_4 <- factor(people_4_classes$class[sapply(Crit_data$Participant, function(x) which(people_4_classes$Participant==x))])
+
+people_5_classes <- as.data.frame(m_5cl$pprob)
+# View(people_5_classes)
+LCA_5_classes <- write.csv(people_5_classes, "LCA_5_classes.csv")
+Crit_data$CLASS_5 <- factor(people_5_classes$class[sapply(Crit_data$Participant, function(x) which(people_5_classes$Participant==x))])
+
+write.csv(Crit_data, "df_LCA_reviewed.csv")
+
+hist(Crit_data$Response, freq = FALSE)
+plot(density(Crit_data$Response))
+
+```
+
+SUGGESTION: retrieving subjects IDs for each class in the case of 2, 3, 4, and 5 classes
+
+```{r eval=FALSE, include=FALSE}
+Sugg_data$Participant <- as.character(Sugg_data$Participant)
+
+people_2_classes <- as.data.frame(m_2cl$pprob)
+# View(people_2_classes)
+LCA_2_classes <- write.csv(people_2_classes, "LCA_2_classes.csv")
+Sugg_data$CLASS_2 <- factor(people_2_classes$class[sapply(Sugg_data$Participant, function(x) which(people_2_classes$Participant==x))])
+
+people_3_classes <- as.data.frame(m_3cl$pprob)
+# View(people_3_classes)
+LCA_3_classes <- write.csv(people_3_classes, "LCA_3_classes.csv")
+Sugg_data$CLASS_3 <- factor(people_3_classes$class[sapply(Sugg_data$Participant, function(x) which(people_3_classes$Participant==x))])
+
+people_4_classes <- as.data.frame(m_4cl$pprob)
+# View(people_4_classes)
+LCA_4_classes <- write.csv(people_4_classes, "LCA_4_classes.csv")
+Sugg_data$CLASS_4 <- factor(people_4_classes$class[sapply(Sugg_data$Participant, function(x) which(people_4_classes$Participant==x))])
+
+people_5_classes <- as.data.frame(m_5cl$pprob)
+# View(people_5_classes)
+LCA_5_classes <- write.csv(people_5_classes, "LCA_5_classes.csv")
+Sugg_data$CLASS_5 <- factor(people_5_classes$class[sapply(Sugg_data$Participant, function(x) which(people_5_classes$Participant==x))])
+
+write.csv(Sugg_data, "df_LCA_reviewed_suggestion.csv")
+
+hist(Sugg_data$Response, freq = FALSE)
+plot(density(Sugg_data$Response))
+
+```
+
+Selection of the number of classes: 7 criteria (see <https://www.displayr.com/work-number-classes-latent-class-analysis/#>:\~:text=There%20are%20seven%20approaches%20to,your%20own%20Latent%20Class%20Analysis!)
+
+We will look at the BIC and the "no small classes" criteria
+
+No small classes: The basic idea of this approach is that you choose the highest number of classes, such that none of the classes are small (e.g., less than 5% of the sample). This rule has long been used in practice as a part of the idea of domain-usefulness but has recently been discovered also to have some theoretical justification (Nasserinejad, K., van Rosmalen, J., de Kort, W., Lesaffre, E. (2017) Comparison of criteria for choosing the number of classes in Bayesian finite mixture models. PloS one, 12).
+
+################################################################################################ 
+
+################################################################################################ 
+
+CRITICISM: Starting from the new dataset (df_LCA_reviewed_criticism.csv) to not have to run all the models
+
+```{r}
+Crit_data <- read_csv("/Users/p.larrouy/Desktop/Github_Probier/df_LCA_reviewed_criticism.csv")
+```
+
+
+CRITICISM: LM MODELS for each of the 4 classes
+
+```{r}
+# Attribute classes
+class1 <- subset(Crit_data, Crit_data$CLASS_4=="1")
+class2 <- subset(Crit_data, Crit_data$CLASS_4=="2")
+class3 <- subset(Crit_data, Crit_data$CLASS_4=="3")
+class4 <- subset(Crit_data, Crit_data$CLASS_4=="4")
+
+# Aggregate data by Stim for Class 1
+class1_agg <- class1 %>%
+  group_by(Stim) %>%
+  summarize(
+    Response = mean(Response, na.rm = TRUE),
+    Average = mean(Average, na.rm = TRUE),
+    intention.x = first(intention.x),  # Takes the first entry because it is not a value to average
+    spikiness = mean(as.numeric(spikiness), na.rm = TRUE),
+    direction = mean(as.numeric(direction), na.rm = TRUE))
+    
+# Then run your linear model on the aggregated data for Class 1
+lm_1 <- lm(Response ~ Average + intention.x + spikiness + direction, data = class1_agg)
+summary(lm_1) # R2 = .782, R2adj = .7707, f(4,77) = 69.07, p < .0001
+
+
+# Aggregate data by Stim for Class 2
+class2_agg <- class2 %>%
+  group_by(Stim) %>%
+  summarize(
+    Response = mean(Response, na.rm = TRUE),
+    Average = mean(Average, na.rm = TRUE),
+    intention.x = first(intention.x),  # Takes the first entry because it is not a value to average
+    spikiness = mean(as.numeric(spikiness), na.rm = TRUE),
+    direction = mean(as.numeric(direction), na.rm = TRUE))
+    
+# Then run your linear model on the aggregated data for Class 2
+lm_2 <- lm(Response ~ Average + intention.x + spikiness + direction, data = class2_agg)
+summary(lm_2) # R2 = .1509, R2adj = .1068, f(4,77) = 3.422, p = .0125
+
+# Aggregate data by Stim for Class 3
+class3_agg <- class3 %>%
+  group_by(Stim) %>%
+  summarize(
+    Response = mean(Response, na.rm = TRUE),
+    Average = mean(Average, na.rm = TRUE),
+    intention.x = first(intention.x),  # Takes the first entry because it is not a value to average
+    spikiness = mean(as.numeric(spikiness), na.rm = TRUE),
+    direction = mean(as.numeric(direction), na.rm = TRUE))
+    
+# Then run your linear model on the aggregated data for Class 3
+lm_3 <- lm(Response ~ Average + intention.x + spikiness + direction, data = class3_agg)
+summary(lm_3) # R2 = .3692, R2adj = .3364, f(4,77) = 11.27, p < .0001
+
+# Aggregate data by Stim for Class 4
+class4_agg <- class4 %>%
+  group_by(Stim) %>%
+  summarize(
+    Response = mean(Response, na.rm = TRUE),
+    Average = mean(Average, na.rm = TRUE),
+    intention.x = first(intention.x),  # Takes the first entry because it is not a value to average
+    spikiness = mean(as.numeric(spikiness), na.rm = TRUE),
+    direction = mean(as.numeric(direction), na.rm = TRUE))
+    
+# Then run your linear model on the aggregated data for Class 4
+lm_4 <- lm(Response ~ Average + intention.x + spikiness + direction, data = class4_agg)
+summary(lm_4) # R2 = .7218, R2adj = .7073, f(4,77) = 49.94, p < .0001
+
+# Write it down nicely for Appendix C
+export_summs(lm_1, lm_2, lm_3, lm_4, scale = TRUE, error_format = "[{conf.low}, {conf.high}]")
+
+
+```
+PLOT models outputs for Criticism (4 classes)
+
+```{r}
+modelsummary(
+  list(lm_1, lm_2, lm_3, lm_4),
+  statistic = "[{conf.low}, {conf.high}]",  # Custom CI format
+  output = "table.docx"
+)
+
+plot_models_crit <- plot_summs(lm_1, lm_2, lm_3, lm_4,scale = TRUE,error_format = "[{conf.low}, {conf.high}]",coefs = c( "Discrete contours" = "intention.xsugg","Spikiness" = "spikiness","Direction" = "direction","Mean f0" = "Average"), colors = "Reds", plot.distributions = FALSE, model.names = c("Group 1 (n = 25): R2 = .78\nf(4,77) = 69.07, p < .001", "Group 2 (n = 73): R2 = .15,\nf(4,77) = 3.422, p = .0125", "Group 3 (n = 43): R2 = .37,\nf(4,77) = 11.27, p < .001", "Group 4 (n = 36): R2 = .72,\nf(4,77) = 49.94, p < .001"))
+
+plot_models_crit <- plot_models_crit + theme(legend.position="right")+ xlim(-25,30)
+
+print(plot_models_crit)
+```
+
+
+SUGGESTION: Starting from the new dataset (df_LCA_reviewed_suggestion.csv) to not have to run all the models
+
+```{r}
+Sugg_data <- read_csv("/Users/p.larrouy/Desktop/Github_Probier/df_LCA_reviewed_suggestion.csv")
+```
+
+SUGGESTION: LM MODELS for each of the 3 classes
+
+```{r}
+# Attribute classes
+class1 <- subset(Sugg_data, Sugg_data$CLASS_3=="1")
+class2 <- subset(Sugg_data, Sugg_data$CLASS_3=="2")
+class3 <- subset(Sugg_data, Sugg_data$CLASS_3=="3")
+
+# Aggregate data by Stim for Class 1
+class1_agg <- class1 %>%
+  group_by(Stim) %>%
+  summarize(
+    Response = mean(Response, na.rm = TRUE),
+    Average = mean(Average, na.rm = TRUE),
+    intention.x = first(intention.x),  # Takes the first entry because it is not a value to average
+    spikiness = mean(as.numeric(spikiness), na.rm = TRUE),
+    direction = mean(as.numeric(direction), na.rm = TRUE))
+    
+# Then run your linear model on the aggregated data for Class 1
+lm_1 <- lm(Response ~ Average + intention.x + spikiness + direction, data = class1_agg)
+summary(lm_1) # R2 = .4087, R2adj = .378, f(4,77) = 13.31, p < .0001
+
+
+# Aggregate data by Stim for Class 2
+class2_agg <- class2 %>%
+  group_by(Stim) %>%
+  summarize(
+    Response = mean(Response, na.rm = TRUE),
+    Average = mean(Average, na.rm = TRUE),
+    intention.x = first(intention.x),  # Takes the first entry because it is not a value to average
+    spikiness = mean(as.numeric(spikiness), na.rm = TRUE),
+    direction = mean(as.numeric(direction), na.rm = TRUE))
+    
+# Then run your linear model on the aggregated data for Class 2
+lm_2 <- lm(Response ~ Average + intention.x + spikiness + direction, data = class2_agg)
+summary(lm_2) # R2 = .7374, R2adj = .7237, f(4,77) = 54.05, p < .001
+
+# Aggregate data by Stim for Class 3
+class3_agg <- class3 %>%
+  group_by(Stim) %>%
+  summarize(
+    Response = mean(Response, na.rm = TRUE),
+    Average = mean(Average, na.rm = TRUE),
+    intention.x = first(intention.x),  # Takes the first entry because it is not a value to average
+    spikiness = mean(as.numeric(spikiness), na.rm = TRUE),
+    direction = mean(as.numeric(direction), na.rm = TRUE))
+    
+# Then run your linear model on the aggregated data for Class 3
+lm_3 <- lm(Response ~ Average + intention.x + spikiness + direction, data = class3_agg)
+summary(lm_3) # R2 = .8777, R2adj = .8713, f(4,77) = 138.1, p < .0001
+
+# Write it down nicely for Appendix C
+export_summs(lm_1, lm_2, lm_3, scale = TRUE, error_format = "[{conf.low}, {conf.high}]")
+
+```
+
+PLOT models outputs for Suggestion (3 classes)
+
+```{r}
+modelsummary(
+  list(lm_1, lm_2, lm_3),
+  statistic = "[{conf.low}, {conf.high}]",  # Custom CI format
+  output = "table_sugg.docx"
+)
+
+plot_models_sugg <- plot_summs(lm_1, lm_2, lm_3,scale = TRUE,error_format = "[{conf.low}, {conf.high}]",coefs = c( "Discrete contours" = "intention.xsugg","Spikiness" = "spikiness","Direction" = "direction","Mean f0" = "Average"), colors = "Blues", plot.distributions = FALSE, model.names = c("Group 1 (n = 62): R2 = .41,\nf(4,77) = 13.31, p < .001", "Group 2 (n = 25): R2 = .74,\nf(4,77) = 54.05, p < .001", "Group 3 (n = 90): R2 = .88,\nf(4,77) = 138.1, p < .001"))
+
+plot_models_sugg <- plot_models_sugg + theme(legend.position="right")+ xlim(-25,30)
+
+print(plot_models_sugg)
+```
+
+Finalize the figure of listeners' profiles
+
+```{r}
+
+# Add labels (A/B) while preserving legends
+plot_models_crit <- plot_models_crit +
+  labs(title = "A. Criticism") +
+  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0),
+        legend.position = "right") 
+
+plot_models_sugg <- plot_models_sugg +
+  labs(title = "B. Suggestion") +
+  theme(plot.title = element_text(size = 14, face = "bold", hjust = 0),
+        legend.position = "right") 
+
+# Arrange vertically with height adjustment
+combined_plots <- plot_models_crit / plot_models_sugg +
+  plot_layout(heights = c(1.2, 1))  # Bottom plot 20% shorter
+
+# Display
+combined_plots
+```
+

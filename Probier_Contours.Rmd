@@ -1,0 +1,642 @@
+---
+title: "Probier Contours"
+Who: "Pauline Larrouy-Maestri. Collaboration with Daniela Sammler, Hanna Ringer, and
+  David Poeppel"
+# Starting Date: 2022
+# Update: Sept 20th 2023
+# Update: Nov 2nd 2023
+# Update: July 14 2025
+output:
+  html_document:
+    df_print: paged
+---
+
+## ANALYSIS OF THE DIVERGENCE (results from the contour selection)
+
+```{r}
+
+rm(list = ls())
+
+library(ggplot2)
+library(readxl)
+library(stats)
+library(ez)
+library(ggpubr)
+library(dplyr)
+library(patchwork)
+library(cowplot)
+library(rstatix)
+
+# Call the directory of the data file "Probier_data"
+
+Agreement1 <- read_excel("/Users/.../Probier_data.xlsx", sheet = "Agreement1")
+
+Agreement2 <- read_excel("/Users/.../Probier_data.xlsx", sheet = "Agreement2")
+```
+
+Proportion of different contour selection between the crit and sugg conditions
+
+```{r}
+
+## Analysis of 2-AFC task
+
+# One-sample t-test
+print(res_para <- t.test(Agreement1$Diff_percent, mu = 50,alternative = "greater"))
+summary(Agreement1$Diff_percent)
+
+# One-sample wilcoxon test: if you want to test whether the median selection is greater than 375 or 50: chance level (one-tailed test)
+print(res_non_para <- wilcox.test(Agreement1$Diff_percent, mu = 50,alternative = "greater"))
+
+## Analysis of 4-AFC task
+
+# One-sample t-test
+print(res_para <- t.test(Agreement2$Diff_percent, mu = 50,alternative = "greater"))
+summary(Agreement2$Diff_percent)
+
+# One-sample wilcoxon test: if you want to test whether the median selection is greater than 375 or 50: chance level (one-tailed test)
+print(res_non_para <- wilcox.test(Agreement2$Diff_percent, mu = 50,alternative = "greater"))
+
+```
+
+Illustration of the divergence with violin plots
+
+```{r}
+
+# Load and standardize Agreement1
+agreement1_clean <- Agreement1 %>%
+  rename(Divergence = Diff_percent) %>%
+  mutate(Condition = "2-AFC") %>%  # Assign condition (adjust as needed)
+  select(Sub, Condition, Divergence)
+
+# Load and standardize Agreement2
+agreement2_clean <- Agreement2 %>%
+  rename(Divergence = Diff_percent) %>%
+  mutate(Condition = "4-AFC") %>%  # Assign condition (adjust as needed)
+  select(Sub, Condition, Divergence)
+
+# Combine vertically
+combined_data <- bind_rows(agreement1_clean, agreement2_clean)
+
+# Verify
+head(combined_data)
+
+# Plot
+combined_data <- bind_rows(
+  Agreement1 %>% mutate(Condition = "2-AFC"),
+  Agreement2 %>% mutate(Condition = "4-AFC")
+) %>%
+  rename(Divergence = Diff_percent)  # Use the common column
+
+combined_plot <- ggplot(combined_data, aes(x = Condition, y = Divergence)) +
+  geom_violin(aes(fill = Condition), 
+              color = "black", 
+              alpha = 0.7, 
+              width = 0.6,  
+              show.legend = FALSE) +
+  scale_fill_manual(values = c("2-AFC" = "gray70", "4-AFC" = "gray70")) +
+  geom_jitter(width = 0.2, height = 0, size = 1.5, alpha = 0.6, color = "black") +
+  stat_summary(fun = median, geom = "crossbar", width = 0.2, linewidth = 0.3, color = "black") +
+  geom_hline(yintercept = 50, linetype = "dashed", color = "gray40", linewidth = 0.5) +
+  labs(y = "Divergence in contour selection (%)", x = "") +
+  scale_y_continuous(limits = c(0, 100)) +
+  theme_minimal() +
+  theme(
+    axis.title.y = element_text(size = 12, face = "bold"),
+    axis.text = element_text(size = 10),
+    panel.grid.major.x = element_blank(),
+    plot.margin = margin(5, 2, 5, 2),
+    aspect.ratio = 1.5
+  )
+
+# Display plot
+print(combined_plot)
+```
+
+
+## DESCRIPTION OF THE CONTOURS FROM THE REVERSE CORRELATION METHOD
+
+Preparation and loading(s)
+
+```{r}
+rm(list = ls())
+
+setwd("/Users/p.larrouy/Desktop")
+
+library(readxl)
+library(ggplot2)
+library(lme4)
+library(lmerTest)
+library(tidyverse)
+library(ggbeeswarm)
+library(ggpubr)
+library(patchwork)
+library(tidyverse)
+library(ggpubr)
+
+
+kernel_data <- read_excel("Probier_data.xlsx",sheet = "Kernels")
+
+```
+
+Create a column that every participant has a specific ID
+
+```{r}
+kernel_data$ID <- paste(kernel_data$Probier, kernel_data$participant, sep = "_")
+```
+
+Compute the average f0
+
+```{r}
+selected_columns <- c("p1", "p2", "p3", "p4", "p5")
+kernel_data$Average <- rowMeans(kernel_data[selected_columns])
+```
+
+To avoid error: transformation of intention as factor and transformation of spikiness and direction as numeric.
+
+```{r}
+kernel_data$ID <- as.factor(kernel_data$ID)
+kernel_data$intention <- as.factor(kernel_data$intention)
+kernel_data$spikiness <- as.numeric(kernel_data$spikiness)
+kernel_data$direction <- as.numeric(kernel_data$direction)
+```
+
+# Comparison of mental representation with paired-t-tests at the three levels of granularity
+
+Discrete contours: paired t test for each of the five points
+
+Application of the Holm-Bonferroni method for the multiple comparison correction => p_adj = p / k = 0.5 / 5 = .01
+
+
+```{r}
+
+t.test(kernel_data$p1[kernel_data$intention == "crit"], kernel_data$p1[kernel_data$intention == "sugg"], paired = TRUE)
+
+t.test(kernel_data$p2[kernel_data$intention == "crit"], kernel_data$p2[kernel_data$intention == "sugg"], paired = TRUE)
+
+t.test(kernel_data$p3[kernel_data$intention == "crit"], kernel_data$p3[kernel_data$intention == "sugg"], paired = TRUE)
+
+t.test(kernel_data$p4[kernel_data$intention == "crit"], kernel_data$p4[kernel_data$intention == "sugg"], paired = TRUE)
+
+t.test(kernel_data$p5[kernel_data$intention == "crit"], kernel_data$p5[kernel_data$intention == "sugg"], paired = TRUE)
+
+```
+mean f0: paired t test without correction for multiple comparisons
+
+```{r}
+t.test(kernel_data$Average[kernel_data$intention == "crit"], kernel_data$Average[kernel_data$intention == "sugg"], paired = TRUE)
+```
+
+contour dimension: paired sample t test (p_adj = .025)
+
+```{r}
+
+t.test(kernel_data$spikiness[kernel_data$intention == "crit"], kernel_data$spikiness[kernel_data$intention == "sugg"], paired = TRUE)
+
+t.test(kernel_data$direction[kernel_data$intention == "crit"], kernel_data$direction[kernel_data$intention == "sugg"], paired = TRUE)
+
+```
+
+
+Figure 2A: Discrete contours
+
+```{r}
+
+# Prepare data with explicit row IDs
+connected_data <- kernel_data %>%
+  mutate(id = row_number()) %>%  # Create unique IDs
+  pivot_longer(p1:p5, names_to = "point", values_to = "value") %>%
+  mutate(point = factor(point, levels = paste0("p", 1:5)))
+
+# Create unified plot
+plot_2A <- ggplot(connected_data, aes(x = point, y = value)) +
+  
+  # --- Individual Points ---
+  geom_quasirandom(
+    aes(color = intention),
+    width = 0.1,
+    alpha = 0.3,
+    size = 1.5,
+    shape = 16,
+    dodge.width = 0.3
+  ) +
+  
+  # --- Connecting Lines ---
+  geom_line(
+    aes(group = interaction(id, intention)),
+    color = "gray60",
+    alpha = 0.15,
+    size = 0.3,
+    position = position_dodge(width = 0.3)
+  ) +
+  
+  # --- Standard Deviation Bars (now color-matched) ---
+  stat_summary(
+    aes(group = intention, color = intention),  # Color by intention
+    fun.data = mean_sdl,
+    fun.args = list(mult = 1),
+    geom = "errorbar",
+    width = 0.1,
+    size = 0.6,  # Slightly thicker
+    alpha = 0.8,  # Less transparent
+    position = position_dodge(width = 0.3)
+  ) +
+  
+  # --- Mean Trajectories ---
+  stat_summary(
+    aes(group = intention, color = intention),
+    fun = mean,
+    geom = "line",
+    size = 1.2,
+    position = position_dodge(width = 0.3)
+  ) +
+  
+  # --- Mean Points ---
+  stat_summary(
+    aes(fill = intention, color = intention),
+    fun = mean,
+    geom = "point",
+    shape = 21,
+    size = 4,
+    stroke = 1,
+    position = position_dodge(width = 0.3)
+  ) +
+
+  # --- Styling ---
+  scale_color_manual(values = c("#e41a1c","#377eb8"))+
+  scale_fill_manual(values = c("#e41a1c","#377eb8")) +
+  labs(y = "Pitch values (cents)", x = "Time points") +
+  theme_bw() +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.line = element_line(size = 0.5),
+    panel.border = element_blank(),
+    legend.position = "none"
+  )
+
+plot_2A
+```
+
+Figure 2B: contour dimensions
+
+```{r}
+summary_data <- kernel_data %>%
+  group_by(intention) %>%  # Group by 'crit' and 'sugg'
+  summarise(
+    mean_spikiness = mean(spikiness, na.rm = TRUE),
+    mean_direction = mean(direction, na.rm = TRUE),
+    sd_spikiness = sd(spikiness, na.rm = TRUE),
+    sd_direction = sd(direction, na.rm = TRUE)
+  )
+
+plot_2B <- ggplot(kernel_data, aes(x = spikiness, y = direction)) +
+  theme_bw() +
+  
+  # --- Individual Points ---
+  geom_point(
+    aes(fill = intention, color = intention),
+    size = 3,
+    alpha = 0.5,
+    shape = 21
+  ) +
+  
+  # --- SD Bars ---
+  geom_errorbarh(
+    data = summary_data,
+    aes(y = mean_direction,
+        xmin = mean_spikiness - sd_spikiness,
+        xmax = mean_spikiness + sd_spikiness,
+        color = intention),
+    height = 0.05,
+    inherit.aes = FALSE,
+    size = 0.8,
+    alpha = 0.7
+  ) +
+  geom_errorbar(
+    data = summary_data,
+    aes(x = mean_spikiness,
+        ymin = mean_direction - sd_direction,
+        ymax = mean_direction + sd_direction,
+        color = intention),
+    width = 0.05,
+    inherit.aes = FALSE,
+    size = 0.8,
+    alpha = 0.7
+  ) +
+  
+  # --- Mean Points ---
+  geom_point(
+    data = summary_data,
+    aes(x = mean_spikiness, y = mean_direction,
+        fill = intention, color = intention),
+    size = 5,
+    shape = 21,
+    stroke = 1.2
+  ) +
+  
+  # --- Reference Lines ---
+  geom_hline(yintercept = 0, color = "grey", linetype = "dashed", linewidth = 0.5) +
+  geom_vline(xintercept = 0, color = "grey", linetype = "dashed", linewidth = 0.5) +
+  
+  # --- Scales ---
+  scale_y_continuous(
+    name = "direction (PC-scores)",
+    limits = c(-0.6, 0.8),
+    breaks = seq(-1, 1, 0.5),
+    expand = c(0, 0)
+  ) +
+  scale_x_continuous(
+    name = "spikiness (PC-scores)",
+    limits = c(-0.5, 0.8),
+    breaks = seq(-0.5, 0.5, 0.5),
+    expand = c(0, 0)
+  ) +
+  scale_color_manual(values = c("#e41a1c","#377eb8")) +
+  scale_fill_manual(values = c("#e41a1c","#377eb8")) +
+  
+  # --- Square Aspect Ratio ---
+  coord_fixed(ratio = 0.8/2) +  # (x-range/y-range) = (0.8-(-0.8))/(1-(-1)) = 1.6/2 = 0.8
+  
+  # --- Theme ---
+  theme(
+    panel.grid = element_blank(),
+    axis.line = element_line(size = 0.5),
+    panel.border = element_blank(),
+    legend.position = "none",
+    aspect.ratio = 1  # Ensures panel remains square
+  )
+plot_2B
+```
+
+Figure 2C: Mean f0
+
+```{r}
+plot_2C <- ggplot(kernel_data, aes(x = intention, y = Average)) + 
+  theme_bw() +
+  
+  # --- Individual Points (more visible) ---
+  geom_point(
+    aes(color = intention),
+    position = position_jitter(width = 0.15, height = 0),  # Reduced jitter width
+    alpha = 0.5,  # Increased visibility
+    size = 3,     # Slightly larger
+    shape = 16
+  ) +
+  
+  # --- Standard Deviation Bars ---
+  stat_summary(
+    fun.data = mean_sdl,
+    fun.args = list(mult = 1),
+    geom = "errorbar",
+    aes(group = intention, color = intention),
+    width = 0.2,  # Wider bars for better visibility
+    size = 1,     # Thicker lines
+    alpha = 1,    # Fully opaque
+    lineend = "round"  # Rounded ends
+  ) +
+  
+  # --- Mean Points (enhanced) ---
+  stat_summary(
+    fun = mean,
+    geom = "point",
+    aes(fill = intention, color = intention),
+    shape = 21,
+    size = 5,      # Larger mean points
+    stroke = 1.5,   # Thicker outline
+    show.legend = FALSE  # Avoid duplicate in legend
+  ) +
+  
+  # --- Zero Reference Line (more subtle) ---
+  geom_hline(
+    yintercept = 0, 
+    linewidth = 0.3,  # Thinner line
+    color = "grey60", # Lighter color
+    linetype = "dashed"
+  ) +
+  
+  # --- Scales and Theme ---
+  scale_y_continuous(
+    name = "mean f0 (cents)",  # More descriptive label
+    limits = c(-150, 150), 
+    breaks = seq(-150, 150, 50),
+    expand = expansion(mult = c(0.05, 0.1))
+  ) +
+  scale_fill_manual(values = c("#e41a1c","#377eb8")) +
+  scale_color_manual(values = c("#e41a1c","#377eb8")) +
+  theme(
+    panel.grid = element_blank(),
+    axis.title.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    axis.text.x = element_blank(),
+    legend.position = "none",
+    panel.border = element_blank(),
+    axis.line = element_line(linewidth = 0.5),
+    axis.title.y = element_text(size = 12, margin = margin(r = 10))
+  )
+
+plot_2C
+```
+
+Combining plots and setting the label sizes
+
+```{r}
+
+# Increase text sizes in all plots
+plot_2A <- plot_2A +
+  theme(
+    axis.title = element_text(size = 14, face = "bold"), 
+    axis.text = element_text(size = 12)                   
+  )
+
+plot_2B <- plot_2B +
+  theme(
+    axis.title = element_text(size = 14, face = "bold"),
+    axis.text = element_text(size = 12)
+  ) +
+  labs(x = "spikiness (PC-scores)", y = "direction (PC-scores)")
+
+plot_2C <- plot_2C +
+  theme(
+    axis.title.y = element_text(size = 14, face = "bold", margin = margin(r = 15)),
+    axis.text.y = element_text(size = 12),
+    axis.title.x = element_blank()
+  )
+
+# Create an impossible-to-miss legend
+legend_plot <- ggplot(kernel_data, aes(x = intention, y = Average, color = intention)) +
+  geom_point(size = 4) +  # Massive points in legend
+  scale_color_manual(
+    values = c("#e41a1c","#377eb8"),
+    labels = c("Criticism", "Suggestion"),
+    name = "Intention" 
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "top",
+    legend.title = element_text(size = 14, face = "bold"),  
+    legend.text = element_text(size = 14),                
+    legend.key.size = unit(0.5, "cm"),                    
+    legend.spacing.x = unit(0.5, "cm")                       
+  )
+
+shared_legend <- get_legend(legend_plot)
+
+# Combine plots with new ratios
+combined_plot <- wrap_plots(
+  plot_2A + theme(legend.position = "none"),
+  plot_2B + theme(legend.position = "none"),
+  plot_2C + theme(legend.position = "none"),
+  nrow = 1,
+  widths = c(3, 4, 1)  # A=3, B=4, C=1
+) / 
+shared_legend +
+plot_layout(
+  heights = c(10, 2),  
+  guides = "collect"
+)
+
+# Add large panel labels
+combined_plot <- combined_plot +
+  plot_annotation(tag_levels = list(c("A", "B", "C"))) &
+  theme(
+    plot.tag = element_text(face = "bold", size = 14),  
+    plot.margin = margin(5, 5, 5, 5)                
+  )
+
+# Save with big dimensions
+ggsave("final_plot_giant_labels.png", combined_plot,
+       width = 10, height = 6, units = "in", dpi = 600)  # Giant canvas
+
+print(combined_plot)
+```
+
+
+other visualisation of Figure 2B (just as a back up)
+
+```{r}
+
+# Main scatter plot (with legend)
+main_plot <- ggplot(kernel_data, aes(x = spikiness, y = direction)) + 
+  geom_point(aes(color = intention, fill = intention), size = 3, alpha = 0.5) +
+  geom_point(
+    aes(x = mean_spikiness, y = mean_direction, color = intention, fill = intention),
+    data = kernel_data %>% group_by(intention) %>% summarise(mean_spikiness = mean(spikiness), mean_direction = mean(direction)),
+    size = 5, shape = 19
+  ) +
+  scale_y_continuous(
+    name = "direction (PC-scores)", 
+    limits = c(-1, 1), 
+    breaks = seq(-1, 1, 0.5),
+    expand = c(0, 0)
+  ) +
+  scale_x_continuous(
+    name = "spikiness (PC-scores)", 
+    limits = c(-0.8, 0.8), 
+    breaks = seq(-0.8, 0.8, 0.4),
+    expand = c(0, 0)
+  ) +
+  scale_color_manual(values = c("#e41a1c","#377eb8")) +
+  scale_fill_manual(values = c("#e41a1c","#377eb8")) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    axis.line = element_line(size = 0.5),
+    panel.border = element_blank(),
+    legend.position = "right" # Keep only one legend here
+  ) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey")
+
+# Horizontal boxplot for spikiness (bottom, no legend)
+x_box <- ggplot(kernel_data, aes(x = spikiness, fill = intention)) +
+  geom_boxplot(aes(y = intention), width = 0.3, alpha = 0.5, orientation = "y", show.legend = FALSE) +
+  scale_fill_manual(values = c("#e41a1c","#377eb8")) +
+  scale_x_continuous(limits = c(-0.8, 0.8), expand = c(0, 0)) +
+  theme_void()
+
+# Vertical boxplot for direction (left, no legend)
+y_box <- ggplot(kernel_data, aes(y = direction, fill = intention)) +
+  geom_boxplot(aes(x = intention), width = 0.3, alpha = 0.5, show.legend = FALSE) +
+  scale_fill_manual(values = c("#e41a1c","#377eb8")) +
+  scale_y_continuous(limits = c(-1, 1), expand = c(0, 0)) +
+  theme_void()
+
+# Combine plots (main plot keeps the legend)
+final_plot <- y_box + main_plot + plot_spacer() + x_box +
+  plot_layout(
+    ncol = 2,
+    nrow = 2,
+    widths = c(1, 4),
+    heights = c(4, 1)
+  )
+
+final_plot
+```
+
+Other visualisation of Figure 2A (as a back up option)
+
+```{r}
+
+# Prepare data
+plot_data <- kernel_data %>% 
+  pivot_longer(p1:p5, names_to = "point", values_to = "value") %>% 
+  mutate(point = factor(point, levels = paste0("p", 1:5)))
+
+# Create plot
+ggplot(plot_data, aes(x = intention, y = value)) +
+  # Distribution visualization
+  geom_boxplot(
+    aes(fill = intention),
+    width = 0.5, 
+    alpha = 0.7,
+    outlier.shape = NA,
+    show.legend = FALSE
+  ) +
+  geom_point(
+    aes(color = intention),
+    position = position_jitter(width = 0.15),
+    alpha = 0.5,
+    size = 2
+  ) +
+  
+  # Mean markers
+  stat_summary(
+    fun = mean, 
+    geom = "point", 
+    shape = 21, 
+    size = 3,
+    fill = "white", 
+    color = "black"
+  ) +
+  
+  # Significance for p4 and p5 only (FIXED)
+  geom_signif(
+    comparisons = list(c("crit", "sugg")),
+    test = "t.test",
+    map_signif_level = TRUE,
+    y_position = max(plot_data$value) * 1.05,
+    tip_length = 0,
+    textsize = 5,
+    vjust = 0.5,
+    data = function(x) {filter(x, point %in% c("p4", "p5"))}  # Corrected filter syntax
+  ) +
+  
+  # Color scheme
+  scale_fill_manual(values = c("#e41a1c","#377eb8")) +
+  scale_color_manual(values = c("#e41a1c","#377eb8")) +
+  
+  # Faceting and theming
+  facet_wrap(~point, nrow = 1) +
+  labs(y = "Value", x = NULL) +
+  theme_minimal() +
+  theme(
+    panel.grid.major.x = element_blank(),
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 11, face = "bold"),
+    axis.text.x = element_blank(),
+    axis.ticks.x = element_blank(),
+    panel.spacing = unit(1, "lines"),
+    legend.position = "top",
+    legend.title = element_blank()
+  )
+```
