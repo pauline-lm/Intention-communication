@@ -1,5 +1,5 @@
 # Probier
-Data and code used in the analyses reported in the manuscript entitled "(Mis)understanding intentions through pitch contours"
+Data and code used in the analyses reported in the manuscript entitled "The role of pitch in the vocal communication of intentions"
 
 Authors: Pauline Larrouy-Maestri, Hanna Ringer, David Poeppel, & Daniela Sammler
 
